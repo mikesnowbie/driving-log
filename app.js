@@ -261,9 +261,9 @@ function listenForChanges() {
 
 function render() {
   const totals = computeTotals();
-  document.getElementById("total-all").textContent = round1(totals.total / 60);
+  document.getElementById("total-all").textContent = round1(totals.total / 60) + (totals.total >= 3000 ? " ⭐" : "");
   document.getElementById("total-day").textContent = round1(totals.day / 60);
-  document.getElementById("total-night").textContent = round1(totals.night / 60);
+  document.getElementById("total-night").textContent = round1(totals.night / 60) + (totals.night >= 600 ? " ⭐" : "");
 
   const banner = document.getElementById("active-banner");
   const startSection = document.getElementById("start-section");
@@ -326,7 +326,7 @@ function modalShell(titleText, bodyHtml) {
     '<div class="modal-box">' +
       '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">' +
         "<h2>" + titleText + "</h2>" +
-        '<button id="modal-close" aria-label="Close" style="border:none; padding:4px; width:28px; height:28px;">\u2715</button>' +
+        '<button id="modal-close" aria-label="Close" style="border:none; padding:0; width:44px; height:44px; font-size:18px; flex-shrink:0;">\u2715</button>' +
       "</div>" +
       bodyHtml +
     "</div>" +
@@ -403,6 +403,7 @@ function openStartModal() {
 function openStopModal() {
   if (!state.active) return;
   const now = new Date();
+  const startNote = (state.active.notes || "").trim();
   const body =
     '<div class="field-group">' +
       '<label class="field-label">End time</label>' +
@@ -410,6 +411,11 @@ function openStopModal() {
         '<input type="date" id="stop-date" value="' + fmtDateInput(now) + '">' +
         '<input type="time" id="stop-time" value="' + fmtTimeInput(now) + '">' +
       "</div>" +
+    "</div>" +
+    (startNote ? '<div class="field-group"><div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Note from start: ' + startNote.replace(/</g, "&lt;") + '</div></div>' : "") +
+    '<div class="field-group">' +
+      '<label class="field-label">' + (startNote ? "Closing note (optional)" : "Notes (optional)") + '</label>' +
+      '<input id="stop-notes" placeholder="' + (startNote ? "Append to start note…" : "Highway practice, rain, etc.") + '">' +
     "</div>" +
     '<button id="stop-confirm" class="btn-primary">Save and finish drive</button>';
   document.getElementById("modal-root").innerHTML = modalShell("Stop drive", body);
@@ -421,6 +427,8 @@ function openStopModal() {
     const startMs = state.active.startTime;
     if (endMs <= startMs) { alert("End time must be after start time."); return; }
     const split = splitDayNight(startMs, endMs, state.config.lat, state.config.lon);
+    const stopNote = document.getElementById("stop-notes").value.trim();
+    const combinedNote = startNote && stopNote ? startNote + " — " + stopNote : startNote || stopNote;
     const entry = {
       id: uid(),
       schemaVersion: SCHEMA_VERSION,
@@ -431,7 +439,7 @@ function openStopModal() {
       nightMinutes: split.night,
       supervisor: state.active.supervisor,
       supervisorName: state.active.supervisorName,
-      notes: state.active.notes
+      notes: combinedNote
     };
     await saveDrive(entry);
     state.active = null;
@@ -453,6 +461,7 @@ function openFixActiveModal() {
   document.getElementById("modal-root").innerHTML = modalShell("Forgot to stop this drive", body);
   attachCloseHandler();
 
+  const fixStartNote = (state.active.notes || "").trim();
   function showTimeMode() {
     const now = new Date();
     document.getElementById("fix-body").innerHTML =
@@ -463,6 +472,11 @@ function openFixActiveModal() {
           '<input type="time" id="fix-time" value="' + fmtTimeInput(now) + '">' +
         "</div>" +
       "</div>" +
+      (fixStartNote ? '<div class="field-group"><div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Note from start: ' + fixStartNote.replace(/</g, "&lt;") + '</div></div>' : "") +
+      '<div class="field-group">' +
+        '<label class="field-label">' + (fixStartNote ? "Closing note (optional)" : "Notes (optional)") + '</label>' +
+        '<input id="fix-notes" placeholder="' + (fixStartNote ? "Append to start note…" : "Highway practice, rain, etc.") + '">' +
+      "</div>" +
       '<button id="fix-confirm" class="btn-primary">Save and close drive</button>';
     document.getElementById("fix-confirm").addEventListener("click", async () => {
       const dt = combineDateTime(document.getElementById("fix-date").value, document.getElementById("fix-time").value);
@@ -471,12 +485,14 @@ function openFixActiveModal() {
       const startMs = state.active.startTime;
       if (endMs <= startMs) { alert("End time must be after start time."); return; }
       const split = splitDayNight(startMs, endMs, state.config.lat, state.config.lon);
+      const fixStopNote = document.getElementById("fix-notes").value.trim();
+      const fixCombinedNote = fixStartNote && fixStopNote ? fixStartNote + " — " + fixStopNote : fixStartNote || fixStopNote;
       const entry = {
         id: uid(), schemaVersion: SCHEMA_VERSION,
         startTime: startMs, endTime: endMs, sortTime: startMs,
         dayMinutes: split.day, nightMinutes: split.night,
         supervisor: state.active.supervisor, supervisorName: state.active.supervisorName,
-        notes: state.active.notes
+        notes: fixCombinedNote
       };
       await saveDrive(entry);
       state.active = null;
@@ -494,11 +510,18 @@ function openFixActiveModal() {
         '<label class="field-label">Classify as</label>' +
         '<select id="fix-class"><option value="day">Day</option><option value="night">Night</option></select>' +
       "</div>" +
+      (fixStartNote ? '<div class="field-group"><div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Note from start: ' + fixStartNote.replace(/</g, "&lt;") + '</div></div>' : "") +
+      '<div class="field-group">' +
+        '<label class="field-label">' + (fixStartNote ? "Closing note (optional)" : "Notes (optional)") + '</label>' +
+        '<input id="fix-notes-dur" placeholder="' + (fixStartNote ? "Append to start note…" : "Highway practice, rain, etc.") + '">' +
+      "</div>" +
       '<button id="fix-confirm-dur" class="btn-primary">Save and close drive</button>';
     document.getElementById("fix-confirm-dur").addEventListener("click", async () => {
       const mins = parseInt(document.getElementById("fix-minutes").value, 10);
       if (!mins || mins <= 0) { alert("Enter a valid number of minutes."); return; }
       const cls = document.getElementById("fix-class").value;
+      const fixDurNote = document.getElementById("fix-notes-dur").value.trim();
+      const fixDurCombined = fixStartNote && fixDurNote ? fixStartNote + " — " + fixDurNote : fixStartNote || fixDurNote;
       const entry = {
         id: uid(), schemaVersion: SCHEMA_VERSION,
         manualDate: state.active.startTime, sortTime: state.active.startTime,
@@ -506,7 +529,7 @@ function openFixActiveModal() {
         dayMinutes: cls === "day" ? mins : 0,
         nightMinutes: cls === "night" ? mins : 0,
         supervisor: state.active.supervisor, supervisorName: state.active.supervisorName,
-        notes: state.active.notes
+        notes: fixDurCombined
       };
       await saveDrive(entry);
       state.active = null;
