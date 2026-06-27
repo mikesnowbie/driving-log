@@ -145,7 +145,11 @@
 </style>
 </head>
 <body>
+<div id="auth-root"></div>
+<div id="app-root" style="display:none;">
 <h1 class="sr-only">Driving log for tracking supervised practice hours, split into day and night minutes based on sunrise and sunset</h1>
+
+<div id="account-bar" style="display:flex; justify-content:flex-end; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); margin-bottom:0.5rem;"></div>
 
 <div id="sync-status">Connecting...</div>
 
@@ -199,6 +203,7 @@
 
 <div id="modal-root"></div>
 
+</div><!-- #app-root -->
 <script type="module" src="app.js"></script>
 </body>
 </html>

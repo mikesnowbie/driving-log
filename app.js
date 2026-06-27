@@ -2,11 +2,18 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import {
   getFirestore, collection, doc, getDocs, setDoc, deleteDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { getSunTimes } from "./sun.js";
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
+
+const ALLOWED_EMAILS = ["mike@snowbies.com", "amy@snowbies.com"];
 
 const DRIVES_COL = "drives";
 const META_DOC = doc(db, "meta", "active");
@@ -737,12 +744,85 @@ function exportCsv() {
   URL.revokeObjectURL(url);
 }
 
-document.getElementById("btn-start").addEventListener("click", openStartModal);
-document.getElementById("btn-stop-now").addEventListener("click", openStopModal);
-document.getElementById("btn-fix-active").addEventListener("click", openFixActiveModal);
-document.getElementById("btn-manual").addEventListener("click", openManualModal);
-document.getElementById("btn-export").addEventListener("click", exportCsv);
-document.getElementById("btn-settings").addEventListener("click", openSettingsModal);
+function showSignInScreen() {
+  document.getElementById("app-root").style.display = "none";
+  document.getElementById("auth-root").innerHTML =
+    '<div style="min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem;">' +
+      '<div style="text-align:center; max-width:320px; width:100%;">' +
+        '<div style="font-size:40px; margin-bottom:1rem;">🚗</div>' +
+        '<h1 style="font-size:20px; font-weight:500; margin:0 0 0.5rem;">Driving log</h1>' +
+        '<p style="font-size:14px; color:var(--text-secondary); margin:0 0 2rem;">Sign in to track your family\'s supervised driving hours.</p>' +
+        '<button id="btn-google-signin" style="display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:12px; font-size:15px;">' +
+          '<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">' +
+            '<path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>' +
+            '<path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>' +
+            '<path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/>' +
+            '<path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/>' +
+          '</svg>' +
+          'Sign in with Google' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+  document.getElementById("btn-google-signin").addEventListener("click", async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      if (e.code !== "auth/popup-closed-by-user") {
+        alert("Sign-in failed: " + e.message);
+      }
+    }
+  });
+}
 
-listenForConfig();
-listenForChanges();
+function showWrongAccountScreen(user) {
+  document.getElementById("app-root").style.display = "none";
+  document.getElementById("auth-root").innerHTML =
+    '<div style="min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem;">' +
+      '<div style="text-align:center; max-width:380px; width:100%;">' +
+        '<div style="font-size:48px; margin-bottom:1rem;">🚧</div>' +
+        '<h2 style="font-size:18px; font-weight:500; margin:0 0 0.75rem;">Wrong driver\'s seat</h2>' +
+        '<p style="font-size:14px; color:var(--text-secondary); margin:0 0 0.75rem;">You\'re signed in as <strong>' + user.email + '</strong>, but this log is a private Snow family operation — teen driver, worried parents, the whole deal.</p>' +
+        '<p style="font-size:14px; color:var(--text-secondary); margin:0 0 1.5rem;">The good news: the code is open source on GitHub. Fork it, set up your own Firebase project, and you too can obsessively log every left turn your teenager makes. 🎉</p>' +
+        '<button id="btn-wrong-signout" style="width:100%;">Sign out and try another account</button>' +
+      '</div>' +
+    '</div>';
+  document.getElementById("btn-wrong-signout").addEventListener("click", () => signOut(auth));
+}
+
+function showAccountBar(user) {
+  const bar = document.getElementById("account-bar");
+  bar.innerHTML =
+    '<span>' + (user.displayName || user.email) + '</span>' +
+    '<span style="color:var(--border-strong);">·</span>' +
+    '<button id="btn-signout" style="background:none; border:none; padding:0; font-size:12px; color:var(--text-muted); cursor:pointer; text-decoration:underline; font-family:inherit;">Sign out</button>';
+  document.getElementById("btn-signout").addEventListener("click", () => signOut(auth));
+  bar.style.display = "flex";
+}
+
+let appInitialized = false;
+function initApp(user) {
+  document.getElementById("auth-root").innerHTML = "";
+  document.getElementById("app-root").style.display = "block";
+  showAccountBar(user);
+  if (appInitialized) return;
+  appInitialized = true;
+  document.getElementById("btn-start").addEventListener("click", openStartModal);
+  document.getElementById("btn-stop-now").addEventListener("click", openStopModal);
+  document.getElementById("btn-fix-active").addEventListener("click", openFixActiveModal);
+  document.getElementById("btn-manual").addEventListener("click", openManualModal);
+  document.getElementById("btn-export").addEventListener("click", exportCsv);
+  document.getElementById("btn-settings").addEventListener("click", openSettingsModal);
+  listenForConfig();
+  listenForChanges();
+}
+
+onAuthStateChanged(auth, (user) => {
+  if (!user) {
+    appInitialized = false;
+    showSignInScreen();
+  } else if (!ALLOWED_EMAILS.includes(user.email)) {
+    showWrongAccountScreen(user);
+  } else {
+    initApp(user);
+  }
+});
