@@ -6,10 +6,10 @@
 // not by hiding this config.
 
 export const firebaseConfig = {
-  apiKey: "REPLACE_ME",
-  authDomain: "REPLACE_ME.firebaseapp.com",
-  projectId: "REPLACE_ME",
-  storageBucket: "REPLACE_ME.firebasestorage.app",
-  messagingSenderId: "REPLACE_ME",
-  appId: "REPLACE_ME"
+  apiKey: "AIzaSyB9q8hrdZ_spY78Sw3BtmwVy-eRRBGo-OE",
+  authDomain: "driving-log-79ec6.firebaseapp.com",
+  projectId: "driving-log-79ec6",
+  storageBucket: "driving-log-79ec6.firebasestorage.app",
+  messagingSenderId: "616603086557",
+  appId: "1:616603086557:web:3479c75228b4e08d653534"
 };
