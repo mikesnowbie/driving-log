@@ -7,6 +7,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { getSunTimes } from "./sun.js";
+import confetti from "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.module.mjs";
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
@@ -14,6 +15,37 @@ const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
 const ALLOWED_EMAILS = ["mike@snowbies.com", "amy@snowbies.com"];
+
+const CONDITIONS = [
+  { id: "highway", label: "Highway" },
+  { id: "residential", label: "Residential" },
+  { id: "parking", label: "Parking lot" },
+  { id: "rain", label: "Rain" },
+  { id: "snow", label: "Snow" },
+];
+
+function conditionsFieldHtml(prefix, selected = []) {
+  const chips = CONDITIONS.map((c) =>
+    '<button type="button" class="cond-chip' + (selected.includes(c.id) ? " selected" : "") +
+    '" data-cond="' + c.id + '">' + c.label + "</button>"
+  ).join("");
+  return '<div class="field-group"><label class="field-label">Conditions</label>' +
+    '<div id="' + prefix + '-conditions" class="conditions-wrap">' + chips + "</div></div>";
+}
+function wireConditions(prefix) {
+  document.querySelectorAll("#" + prefix + "-conditions .cond-chip").forEach((btn) => {
+    btn.addEventListener("click", () => btn.classList.toggle("selected"));
+  });
+}
+function readConditions(prefix) {
+  return Array.from(document.querySelectorAll("#" + prefix + "-conditions .cond-chip.selected"))
+    .map((btn) => btn.getAttribute("data-cond"));
+}
+function conditionsLabel(entry) {
+  if (!entry.conditions || !entry.conditions.length) return "";
+  const map = Object.fromEntries(CONDITIONS.map((c) => [c.id, c.label]));
+  return entry.conditions.map((c) => map[c] || c).join(", ");
+}
 
 const DRIVES_COL = "drives";
 const META_DOC = doc(db, "meta", "active");
@@ -80,6 +112,7 @@ function migrateEntry(e) {
     if (e.supervisor === undefined) e.supervisor = "";
     if (e.notes === undefined) e.notes = "";
   }
+  if (e.conditions === undefined) e.conditions = [];
   return e;
 }
 
@@ -110,8 +143,9 @@ async function saveDrive(entry) {
 async function deleteDrive(id) {
   await deleteDoc(doc(db, DRIVES_COL, id));
 }
-async function saveConfig(lat, lon, label) {
-  await setDoc(META_CONFIG, { lat, lon, label: label || "" });
+async function saveConfig(updates) {
+  const current = state.config ? { ...state.config } : {};
+  await setDoc(META_CONFIG, { ...current, ...updates });
 }
 async function saveActive() {
   if (state.active) {
@@ -155,7 +189,7 @@ function openSetupModal() {
     btn.disabled = true;
     navigator.geolocation.getCurrentPosition(async (pos) => {
       const label = (document.getElementById("setup-label").value.trim()) || "Home";
-      await saveConfig(pos.coords.latitude, pos.coords.longitude, label);
+      await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
     }, () => {
       btn.textContent = "Use current location";
       btn.disabled = false;
@@ -171,13 +205,16 @@ function openSetupModal() {
       return;
     }
     const label = (document.getElementById("setup-label").value.trim()) || "Home";
-    await saveConfig(lat, lon, label);
+    await saveConfig({ lat, lon, label });
   });
 }
 
 function openSettingsModal() {
   const cfg = state.config;
+  const permitVal = cfg && cfg.permitIssuedDate
+    ? new Date(cfg.permitIssuedDate).toISOString().slice(0, 10) : "";
   const body =
+    '<div style="font-size:13px; font-weight:500; margin-bottom:10px; color:var(--text-secondary);">📍 Location</div>' +
     '<div class="field-group">' +
       '<label class="field-label">Location name</label>' +
       '<input id="cfg-label" value="' + (cfg ? cfg.label || "" : "").replace(/"/g, "&quot;") + '" placeholder="Home">' +
@@ -194,8 +231,14 @@ function openSettingsModal() {
         '<input type="number" id="cfg-lon" value="' + (cfg ? cfg.lon : "") + '" step="any">' +
       '</div>' +
     '</div>' +
-    '<button id="cfg-save" class="btn-primary" style="margin-bottom:8px;">Save location</button>';
-  document.getElementById("modal-root").innerHTML = modalShell("Location settings", body);
+    '<button id="cfg-save" class="btn-primary" style="margin-bottom:16px;">Save location</button>' +
+    '<div style="font-size:13px; font-weight:500; margin-bottom:10px; color:var(--text-secondary);">📋 Permit</div>' +
+    '<div class="field-group">' +
+      '<label class="field-label">Permit issued date</label>' +
+      '<input type="date" id="cfg-permit" value="' + permitVal + '">' +
+    '</div>' +
+    '<button id="cfg-permit-save" class="btn-primary">Save permit date</button>';
+  document.getElementById("modal-root").innerHTML = modalShell("Settings", body);
   attachCloseHandler();
 
   document.getElementById("cfg-geolocate").addEventListener("click", () => {
@@ -204,7 +247,7 @@ function openSettingsModal() {
     btn.disabled = true;
     navigator.geolocation.getCurrentPosition(async (pos) => {
       const label = (document.getElementById("cfg-label").value.trim()) || "Home";
-      await saveConfig(pos.coords.latitude, pos.coords.longitude, label);
+      await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
       closeModal();
     }, () => {
       btn.textContent = "Use current location";
@@ -221,7 +264,14 @@ function openSettingsModal() {
       return;
     }
     const label = (document.getElementById("cfg-label").value.trim()) || "Home";
-    await saveConfig(lat, lon, label);
+    await saveConfig({ lat, lon, label });
+    closeModal();
+  });
+
+  document.getElementById("cfg-permit-save").addEventListener("click", async () => {
+    const val = document.getElementById("cfg-permit").value;
+    if (!val) { alert("Pick a date."); return; }
+    await saveConfig({ permitIssuedDate: new Date(val + "T12:00:00").getTime() });
     closeModal();
   });
 }
@@ -259,11 +309,53 @@ function listenForChanges() {
   });
 }
 
+function checkMilestones(totals) {
+  if (totals.total >= 3000 && !localStorage.getItem("dl-celebrated-50h")) {
+    localStorage.setItem("dl-celebrated-50h", "1");
+    confetti({ particleCount: 160, spread: 80, origin: { y: 0.55 } });
+  }
+  if (totals.night >= 600 && !localStorage.getItem("dl-celebrated-10h")) {
+    localStorage.setItem("dl-celebrated-10h", "1");
+    confetti({ particleCount: 100, spread: 70, origin: { y: 0.55 }, colors: ["#85b7eb", "#f5f4f0", "#fac775"] });
+  }
+}
+
 function render() {
   const totals = computeTotals();
   document.getElementById("total-all").textContent = round1(totals.total / 60) + (totals.total >= 3000 ? " ⭐" : "");
   document.getElementById("total-day").textContent = round1(totals.day / 60);
   document.getElementById("total-night").textContent = round1(totals.night / 60) + (totals.night >= 600 ? " ⭐" : "");
+
+  document.getElementById("pb-total").style.width = Math.min(100, totals.total / 3000 * 100) + "%";
+  document.getElementById("pb-night").style.width = Math.min(100, totals.night / 600 * 100) + "%";
+
+  const totalLeft = Math.max(0, round1((3000 - totals.total) / 60));
+  const nightLeft = Math.max(0, round1((600 - totals.night) / 60));
+  const noteEl = document.getElementById("progress-note");
+  if (totals.total >= 3000 && totals.night >= 600) {
+    noteEl.textContent = "All Ohio requirements met! 🎉";
+  } else {
+    const parts = [];
+    if (totals.total < 3000) parts.push(totalLeft + "h to go (total)");
+    if (totals.night < 600) parts.push(nightLeft + "h to go (night)");
+    noteEl.textContent = parts.join(" · ");
+  }
+
+  const permitEl = document.getElementById("permit-info");
+  if (state.config && state.config.permitIssuedDate) {
+    const issued = new Date(state.config.permitIssuedDate);
+    const expires = new Date(issued);
+    expires.setFullYear(expires.getFullYear() + 1);
+    const daysLeft = Math.ceil((expires - Date.now()) / 86400000);
+    permitEl.textContent = "Permit issued " + fmtDisplayDate(issued) +
+      " · Expires " + fmtDisplayDate(expires) +
+      (daysLeft > 0 ? " (" + daysLeft + " days left)" : " ⚠️ Expired");
+    permitEl.style.marginTop = "4px";
+  } else {
+    permitEl.textContent = "";
+  }
+
+  checkMilestones(totals);
 
   const banner = document.getElementById("active-banner");
   const startSection = document.getElementById("start-section");
@@ -304,7 +396,7 @@ function render() {
         '<span style="font-size:14px; font-weight:500;">' + hrs + " hr</span>" +
       "</div>" +
       '<div style="font-size:13px; color:var(--text-secondary); margin-top:2px;">' + timeLabel + (d.supervisor ? " \u00b7 " + supervisorLabel(d) : "") + "</div>" +
-      '<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">Day ' + dayHrs + "h \u00b7 Night " + nightHrs + "h" + (d.notes ? " \u00b7 " + d.notes : "") + "</div>" +
+      '<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">Day ' + dayHrs + "h \u00b7 Night " + nightHrs + "h" + (conditionsLabel(d) ? " \u00b7 " + conditionsLabel(d) : "") + (d.notes ? " \u00b7 " + d.notes : "") + "</div>" +
     "</div>";
   }).join("");
 
@@ -377,14 +469,16 @@ function openStartModal() {
       "</div>" +
     "</div>" +
     supervisorFieldHtml("start", "", "") +
+    conditionsFieldHtml("start", []) +
     '<div class="field-group">' +
       '<label class="field-label">Notes (optional)</label>' +
-      '<input id="start-notes" placeholder="Highway practice, rain, etc.">' +
+      '<input id="start-notes" placeholder="e.g. First highway attempt">' +
     "</div>" +
     '<button id="start-confirm" class="btn-primary">Start drive</button>';
   document.getElementById("modal-root").innerHTML = modalShell("Start drive", body);
   attachCloseHandler();
   wireSupervisorToggle("start");
+  wireConditions("start");
   document.getElementById("start-confirm").addEventListener("click", async () => {
     const dt = combineDateTime(document.getElementById("start-date").value, document.getElementById("start-time").value);
     if (!dt) return;
@@ -393,6 +487,7 @@ function openStartModal() {
       startTime: dt.getTime(),
       supervisor: sup.supervisor,
       supervisorName: sup.supervisorName,
+      conditions: readConditions("start"),
       notes: document.getElementById("start-notes").value.trim()
     };
     await saveActive();
@@ -404,6 +499,7 @@ function openStopModal() {
   if (!state.active) return;
   const now = new Date();
   const startNote = (state.active.notes || "").trim();
+  const startConditions = state.active.conditions || [];
   const body =
     '<div class="field-group">' +
       '<label class="field-label">End time</label>' +
@@ -412,14 +508,16 @@ function openStopModal() {
         '<input type="time" id="stop-time" value="' + fmtTimeInput(now) + '">' +
       "</div>" +
     "</div>" +
+    conditionsFieldHtml("stop", startConditions) +
     (startNote ? '<div class="field-group"><div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Note from start: ' + startNote.replace(/</g, "&lt;") + '</div></div>' : "") +
     '<div class="field-group">' +
       '<label class="field-label">' + (startNote ? "Closing note (optional)" : "Notes (optional)") + '</label>' +
-      '<input id="stop-notes" placeholder="' + (startNote ? "Append to start note…" : "Highway practice, rain, etc.") + '">' +
+      '<input id="stop-notes" placeholder="' + (startNote ? "Append to start note…" : "e.g. Great parking lot session") + '">' +
     "</div>" +
     '<button id="stop-confirm" class="btn-primary">Save and finish drive</button>';
   document.getElementById("modal-root").innerHTML = modalShell("Stop drive", body);
   attachCloseHandler();
+  wireConditions("stop");
   document.getElementById("stop-confirm").addEventListener("click", async () => {
     const dt = combineDateTime(document.getElementById("stop-date").value, document.getElementById("stop-time").value);
     if (!dt) return;
@@ -439,6 +537,7 @@ function openStopModal() {
       nightMinutes: split.night,
       supervisor: state.active.supervisor,
       supervisorName: state.active.supervisorName,
+      conditions: readConditions("stop"),
       notes: combinedNote
     };
     await saveDrive(entry);
@@ -462,6 +561,7 @@ function openFixActiveModal() {
   attachCloseHandler();
 
   const fixStartNote = (state.active.notes || "").trim();
+  const fixStartConditions = state.active.conditions || [];
   function showTimeMode() {
     const now = new Date();
     document.getElementById("fix-body").innerHTML =
@@ -472,12 +572,14 @@ function openFixActiveModal() {
           '<input type="time" id="fix-time" value="' + fmtTimeInput(now) + '">' +
         "</div>" +
       "</div>" +
+      conditionsFieldHtml("fix-time", fixStartConditions) +
       (fixStartNote ? '<div class="field-group"><div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Note from start: ' + fixStartNote.replace(/</g, "&lt;") + '</div></div>' : "") +
       '<div class="field-group">' +
         '<label class="field-label">' + (fixStartNote ? "Closing note (optional)" : "Notes (optional)") + '</label>' +
-        '<input id="fix-notes" placeholder="' + (fixStartNote ? "Append to start note…" : "Highway practice, rain, etc.") + '">' +
+        '<input id="fix-notes" placeholder="' + (fixStartNote ? "Append to start note…" : "e.g. Highway practice") + '">' +
       "</div>" +
       '<button id="fix-confirm" class="btn-primary">Save and close drive</button>';
+    wireConditions("fix-time");
     document.getElementById("fix-confirm").addEventListener("click", async () => {
       const dt = combineDateTime(document.getElementById("fix-date").value, document.getElementById("fix-time").value);
       if (!dt) return;
@@ -492,6 +594,7 @@ function openFixActiveModal() {
         startTime: startMs, endTime: endMs, sortTime: startMs,
         dayMinutes: split.day, nightMinutes: split.night,
         supervisor: state.active.supervisor, supervisorName: state.active.supervisorName,
+        conditions: readConditions("fix-time"),
         notes: fixCombinedNote
       };
       await saveDrive(entry);
@@ -510,12 +613,14 @@ function openFixActiveModal() {
         '<label class="field-label">Classify as</label>' +
         '<select id="fix-class"><option value="day">Day</option><option value="night">Night</option></select>' +
       "</div>" +
+      conditionsFieldHtml("fix-dur", fixStartConditions) +
       (fixStartNote ? '<div class="field-group"><div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Note from start: ' + fixStartNote.replace(/</g, "&lt;") + '</div></div>' : "") +
       '<div class="field-group">' +
         '<label class="field-label">' + (fixStartNote ? "Closing note (optional)" : "Notes (optional)") + '</label>' +
-        '<input id="fix-notes-dur" placeholder="' + (fixStartNote ? "Append to start note…" : "Highway practice, rain, etc.") + '">' +
+        '<input id="fix-notes-dur" placeholder="' + (fixStartNote ? "Append to start note…" : "e.g. Highway practice") + '">' +
       "</div>" +
       '<button id="fix-confirm-dur" class="btn-primary">Save and close drive</button>';
+    wireConditions("fix-dur");
     document.getElementById("fix-confirm-dur").addEventListener("click", async () => {
       const mins = parseInt(document.getElementById("fix-minutes").value, 10);
       if (!mins || mins <= 0) { alert("Enter a valid number of minutes."); return; }
@@ -529,6 +634,7 @@ function openFixActiveModal() {
         dayMinutes: cls === "day" ? mins : 0,
         nightMinutes: cls === "night" ? mins : 0,
         supervisor: state.active.supervisor, supervisorName: state.active.supervisorName,
+        conditions: readConditions("fix-dur"),
         notes: fixDurCombined
       };
       await saveDrive(entry);
@@ -570,12 +676,14 @@ function openManualModal() {
         "</div>" +
       "</div>" +
       supervisorFieldHtml("m", "", "") +
+      conditionsFieldHtml("m-time", []) +
       '<div class="field-group">' +
         '<label class="field-label">Notes (optional)</label>' +
-        '<input id="m-notes" placeholder="Highway practice, rain, etc.">' +
+        '<input id="m-notes" placeholder="e.g. First highway attempt">' +
       "</div>" +
       '<button id="m-confirm-time" class="btn-primary">Save drive</button>';
     wireSupervisorToggle("m");
+    wireConditions("m-time");
     document.getElementById("m-confirm-time").addEventListener("click", async () => {
       const startDt = combineDateTime(document.getElementById("m-start-date").value, document.getElementById("m-start-time").value);
       const endDt = combineDateTime(document.getElementById("m-end-date").value, document.getElementById("m-end-time").value);
@@ -587,6 +695,7 @@ function openManualModal() {
         startTime: startDt.getTime(), endTime: endDt.getTime(), sortTime: startDt.getTime(),
         dayMinutes: split.day, nightMinutes: split.night,
         supervisor: sup.supervisor, supervisorName: sup.supervisorName,
+        conditions: readConditions("m-time"),
         notes: document.getElementById("m-notes").value.trim()
       };
       await saveDrive(entry);
@@ -608,12 +717,14 @@ function openManualModal() {
         '<select id="m-class"><option value="day">Day</option><option value="night">Night</option></select>' +
       "</div>" +
       supervisorFieldHtml("m", "", "") +
+      conditionsFieldHtml("m-dur", []) +
       '<div class="field-group">' +
         '<label class="field-label">Notes (optional)</label>' +
-        '<input id="m-notes" placeholder="Highway practice, rain, etc.">' +
+        '<input id="m-notes-dur" placeholder="e.g. Residential neighborhood loops">' +
       "</div>" +
       '<button id="m-confirm-dur" class="btn-primary">Save drive</button>';
     wireSupervisorToggle("m");
+    wireConditions("m-dur");
     document.getElementById("m-confirm-dur").addEventListener("click", async () => {
       const dateVal = document.getElementById("m-date").value;
       const mins = parseInt(document.getElementById("m-minutes").value, 10);
@@ -629,7 +740,8 @@ function openManualModal() {
         dayMinutes: cls === "day" ? mins : 0,
         nightMinutes: cls === "night" ? mins : 0,
         supervisor: sup.supervisor, supervisorName: sup.supervisorName,
-        notes: document.getElementById("m-notes").value.trim()
+        conditions: readConditions("m-dur"),
+        notes: document.getElementById("m-notes-dur").value.trim()
       };
       await saveDrive(entry);
       closeModal();
@@ -680,6 +792,7 @@ function openEditModal(entry) {
       "</div>";
   }
   body += supervisorFieldHtml("e", entry.supervisor, entry.supervisorName);
+  body += conditionsFieldHtml("e", entry.conditions || []);
   body +=
     '<div class="field-group">' +
       '<label class="field-label">Notes (optional)</label>' +
@@ -690,11 +803,13 @@ function openEditModal(entry) {
   document.getElementById("modal-root").innerHTML = modalShell("Edit drive", body);
   attachCloseHandler();
   wireSupervisorToggle("e");
+  wireConditions("e");
 
   document.getElementById("e-save").addEventListener("click", async () => {
     const sup = readSupervisor("e");
     entry.supervisor = sup.supervisor;
     entry.supervisorName = sup.supervisorName;
+    entry.conditions = readConditions("e");
     entry.notes = document.getElementById("e-notes").value.trim();
     if (isTimed) {
       const startDt = combineDateTime(document.getElementById("e-start-date").value, document.getElementById("e-start-time").value);
@@ -730,8 +845,69 @@ function openEditModal(entry) {
   });
 }
 
+function openPrintWindow() {
+  const sorted = state.drives.slice().sort((a, b) => (a.sortTime || 0) - (b.sortTime || 0));
+  const totals = computeTotals();
+  const totalHrs = round1(totals.total / 60);
+  const dayHrs = round1(totals.day / 60);
+  const nightHrs = round1(totals.night / 60);
+  const rows = sorted.map((d) => {
+    let dateStr, startStr, endStr;
+    if (d.startTime && d.endTime) {
+      dateStr = fmtDisplayDate(new Date(d.startTime));
+      startStr = fmtDisplayTime(new Date(d.startTime));
+      endStr = fmtDisplayTime(new Date(d.endTime));
+    } else {
+      dateStr = fmtDisplayDate(new Date(d.manualDate));
+      startStr = "—"; endStr = "—";
+    }
+    const total = round1(((d.dayMinutes || 0) + (d.nightMinutes || 0)) / 60);
+    const conds = conditionsLabel(d);
+    return "<tr><td>" + dateStr + "</td><td>" + startStr + "</td><td>" + endStr +
+      "</td><td>" + total + "</td><td>" + round1((d.dayMinutes || 0) / 60) +
+      "</td><td>" + round1((d.nightMinutes || 0) / 60) +
+      "</td><td>" + (supervisorLabel(d) || "—") +
+      "</td><td>" + (conds || "—") +
+      "</td><td>" + ((d.notes || "").replace(/</g, "&lt;") || "—") + "</td></tr>";
+  }).join("");
+  const permitLine = state.config && state.config.permitIssuedDate
+    ? "<p>Permit issued: " + fmtDisplayDate(new Date(state.config.permitIssuedDate)) + "</p>" : "";
+  const html = "<!DOCTYPE html><html><head><title>Driving Log Summary</title><style>" +
+    "body{font-family:-apple-system,sans-serif;font-size:12px;margin:0.75in;color:#000}" +
+    "h1{font-size:20px;margin:0 0 4px}" +
+    ".meta{font-size:12px;color:#555;margin-bottom:16px}" +
+    ".totals{display:flex;gap:32px;margin-bottom:20px;padding:12px;background:#f5f5f5;border-radius:6px}" +
+    ".t-item{text-align:center}" +
+    ".t-val{font-size:22px;font-weight:bold;display:block}" +
+    ".t-lbl{font-size:10px;color:#666}" +
+    "table{width:100%;border-collapse:collapse;font-size:11px}" +
+    "th{border-bottom:1.5px solid #000;text-align:left;padding:5px 6px;white-space:nowrap}" +
+    "td{border-bottom:0.5px solid #ddd;padding:4px 6px;vertical-align:top}" +
+    "tr:nth-child(even) td{background:#fafafa}" +
+    ".req{margin-top:16px;font-size:11px;color:#555}" +
+    "</style></head><body>" +
+    "<h1>Driving Log</h1>" +
+    "<div class='meta'>" + permitLine + "<p>Printed " + fmtDisplayDate(new Date()) + " · " + sorted.length + " entries</p></div>" +
+    "<div class='totals'>" +
+      "<div class='t-item'><span class='t-val'>" + totalHrs + "</span><span class='t-lbl'>Total hours</span></div>" +
+      "<div class='t-item'><span class='t-val'>" + dayHrs + "</span><span class='t-lbl'>Day hours</span></div>" +
+      "<div class='t-item'><span class='t-val'>" + nightHrs + "</span><span class='t-lbl'>Night hours</span></div>" +
+    "</div>" +
+    "<table><thead><tr><th>Date</th><th>Start</th><th>End</th><th>Total h</th><th>Day h</th><th>Night h</th><th>Supervisor</th><th>Conditions</th><th>Notes</th></tr></thead>" +
+    "<tbody>" + rows + "</tbody></table>" +
+    "<div class='req'>Ohio requirement: 50 total hours (met: " + (totals.total >= 3000 ? "✓" : totalHrs + " / 50") +
+    ") · 10 night hours (met: " + (totals.night >= 600 ? "✓" : nightHrs + " / 10") + ")</div>" +
+    "</body></html>";
+  const w = window.open("", "_blank");
+  if (!w) { alert("Allow pop-ups to use Print summary."); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  w.print();
+}
+
 function exportCsv() {
-  const rows = [["Date", "Start time", "End time", "Total minutes", "Day minutes", "Night minutes", "Supervisor", "Notes"]];
+  const rows = [["Date", "Start time", "End time", "Total minutes", "Day minutes", "Night minutes", "Supervisor", "Conditions", "Notes"]];
   const sorted = state.drives.slice().sort((a, b) => (a.sortTime || 0) - (b.sortTime || 0));
   sorted.forEach((d) => {
     let dateStr, startStr, endStr;
@@ -749,7 +925,7 @@ function exportCsv() {
     rows.push([
       dateStr, startStr, endStr, total,
       Math.round(d.dayMinutes || 0), Math.round(d.nightMinutes || 0),
-      supervisorLabel(d), (d.notes || "").replace(/"/g, '""')
+      supervisorLabel(d), conditionsLabel(d), (d.notes || "").replace(/"/g, '""')
     ]);
   });
   const csv = rows.map((r) => r.map((c) => {
@@ -834,6 +1010,7 @@ function initApp(user) {
   document.getElementById("btn-fix-active").addEventListener("click", openFixActiveModal);
   document.getElementById("btn-manual").addEventListener("click", openManualModal);
   document.getElementById("btn-export").addEventListener("click", exportCsv);
+  document.getElementById("btn-print").addEventListener("click", openPrintWindow);
   document.getElementById("btn-settings").addEventListener("click", openSettingsModal);
   listenForConfig();
   listenForChanges();

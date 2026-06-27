@@ -144,6 +144,37 @@
     text-align: center;
     margin-bottom: 0.75rem;
   }
+  .progress-bar-bg {
+    background: var(--border);
+    border-radius: 4px;
+    height: 5px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--accent);
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+  .conditions-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .cond-chip {
+    font-size: 13px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    min-height: 34px;
+    color: var(--text-secondary);
+    background: var(--surface-2);
+  }
+  .cond-chip.selected {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  @media print {
+    body { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -171,6 +202,7 @@
     <div class="stat-label">Total</div>
     <div id="total-all" class="stat-value">0.0</div>
     <div class="stat-unit">hours</div>
+    <div class="progress-bar-bg"><div id="pb-total" class="progress-bar-fill"></div></div>
   </div>
   <div class="card">
     <div class="stat-label">☀️ Day</div>
@@ -181,9 +213,11 @@
     <div class="stat-label">🌙 Night</div>
     <div id="total-night" class="stat-value">0.0</div>
     <div class="stat-unit">hours</div>
+    <div class="progress-bar-bg"><div id="pb-night" class="progress-bar-fill"></div></div>
   </div>
 </div>
-<div style="font-size:12px; color:var(--text-muted); text-align:center; margin-bottom:1.25rem;">Ohio requires 50 total hours, 10 at night</div>
+<div id="progress-note" style="font-size:12px; color:var(--text-muted); text-align:center; margin-top:6px;"></div>
+<div id="permit-info" style="font-size:12px; color:var(--text-muted); text-align:center; margin-bottom:1.25rem;"></div>
 
 <div id="start-section">
   <button id="btn-start" class="btn-primary" style="display:flex; align-items:center; justify-content:center; gap:8px; font-size:16px;">
@@ -191,10 +225,11 @@
   </button>
 </div>
 
-<div style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin: 0.75rem 0 1.5rem;">
+<div style="display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin: 0.75rem 0 1.5rem;">
   <button id="btn-manual">Add past drive</button>
   <button id="btn-export">Export CSV</button>
-  <button id="btn-settings">Location</button>
+  <button id="btn-print">Print summary</button>
+  <button id="btn-settings">Settings</button>
 </div>
 
 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem;">
