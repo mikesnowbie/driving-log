@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Driving log">
+<meta name="theme-color" content="#ffffff">
+<title>Driving log</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  :root {
+    --surface-0: #f5f4f0;
+    --surface-1: #efeee9;
+    --surface-2: #ffffff;
+    --text-primary: #1a1a18;
+    --text-secondary: #5f5e5a;
+    --text-muted: #888780;
+    --border: #d8d6cf;
+    --border-strong: #b4b2a9;
+    --accent: #185fa5;
+    --accent-text: #0c447c;
+    --warning-bg: #faeeda;
+    --warning-border: #ef9f27;
+    --warning-text: #854f0b;
+    --danger-text: #a32d2d;
+    --danger-border: #f09595;
+    --radius: 8px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-0: #1c1c1a;
+      --surface-1: #2c2c2a;
+      --surface-2: #252523;
+      --text-primary: #f1efe8;
+      --text-secondary: #b4b2a9;
+      --text-muted: #888780;
+      --border: #444441;
+      --border-strong: #5f5e5a;
+      --accent: #85b7eb;
+      --accent-text: #b5d4f4;
+      --warning-bg: #412402;
+      --warning-border: #ba7517;
+      --warning-text: #fac775;
+      --danger-text: #f7c1c1;
+      --danger-border: #791f1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    padding: 1rem;
+    padding-bottom: 3rem;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 18px; font-weight: 500; margin: 0 0 1rem; }
+  h2 { font-size: 16px; font-weight: 500; margin: 0; }
+  button, input, select {
+    font-family: inherit;
+    font-size: 15px;
+    border-radius: var(--radius);
+  }
+  button {
+    background: var(--surface-2);
+    border: 0.5px solid var(--border-strong);
+    color: var(--text-primary);
+    padding: 10px 14px;
+    cursor: pointer;
+  }
+  button:active { transform: scale(0.98); }
+  input, select {
+    width: 100%;
+    height: 40px;
+    padding: 0 10px;
+    border: 0.5px solid var(--border-strong);
+    background: var(--surface-2);
+    color: var(--text-primary);
+  }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip: rect(0,0,0,0);
+  }
+  .card {
+    background: var(--surface-1);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    text-align: center;
+  }
+  .stat-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  .stat-value { font-size: 20px; font-weight: 500; }
+  .stat-unit { font-size: 11px; color: var(--text-muted); }
+  .log-row {
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    margin-bottom: 8px;
+    cursor: pointer;
+  }
+  .log-row:active { background: var(--surface-1); }
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 1.5rem 1rem;
+    overflow-y: auto;
+    z-index: 100;
+  }
+  .modal-box {
+    background: var(--surface-2);
+    border-radius: 12px;
+    border: 0.5px solid var(--border);
+    padding: 1.25rem;
+    width: 100%;
+    max-width: 400px;
+  }
+  .field-label {
+    font-size: 13px; color: var(--text-secondary);
+    display: block; margin-bottom: 4px;
+  }
+  .field-group { margin-bottom: 12px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .btn-primary {
+    width: 100%;
+    background: var(--accent);
+    color: #ffffff;
+    border: none;
+    font-weight: 500;
+    height: 44px;
+  }
+  .btn-danger {
+    color: var(--danger-text);
+    border-color: var(--danger-border);
+  }
+  #sync-status {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 0.75rem;
+  }
+</style>
+</head>
+<body>
+<h1 class="sr-only">Driving log for tracking supervised practice hours, split into day and night minutes based on sunrise and sunset</h1>
+
+<div id="sync-status">Connecting...</div>
+
+<div id="active-banner" style="display:none; background: var(--warning-bg); border: 0.5px solid var(--warning-border); border-radius: var(--radius); padding: 0.875rem 1rem; margin-bottom: 1rem;">
+  <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+    <span style="font-weight:500; font-size:14px; color:var(--warning-text);">Drive in progress</span>
+  </div>
+  <div id="active-detail" style="font-size:13px; color:var(--text-secondary); margin-bottom:10px;"></div>
+  <div style="display:flex; gap:8px;">
+    <button id="btn-stop-now" style="flex:1; background:var(--accent); color:#fff; border:none; font-weight:500;">Stop drive</button>
+    <button id="btn-fix-active" style="flex:1;">Forgot to stop this</button>
+  </div>
+</div>
+
+<div style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin-bottom: 0.5rem;">
+  <div class="card">
+    <div class="stat-label">Total</div>
+    <div id="total-all" class="stat-value">0.0</div>
+    <div class="stat-unit">hours</div>
+  </div>
+  <div class="card">
+    <div class="stat-label">Day</div>
+    <div id="total-day" class="stat-value">0.0</div>
+    <div class="stat-unit">hours</div>
+  </div>
+  <div class="card">
+    <div class="stat-label">Night</div>
+    <div id="total-night" class="stat-value">0.0</div>
+    <div class="stat-unit">hours</div>
+  </div>
+</div>
+<div style="font-size:12px; color:var(--text-muted); text-align:center; margin-bottom:1.25rem;">Ohio requires 50 total hours, 10 at night</div>
+
+<div id="start-section">
+  <button id="btn-start" class="btn-primary" style="display:flex; align-items:center; justify-content:center; gap:8px; font-size:16px;">
+    Start drive
+  </button>
+</div>
+
+<div style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin: 0.75rem 0 1.5rem;">
+  <button id="btn-manual">Add past drive</button>
+  <button id="btn-export">Export CSV</button>
+  <button id="btn-settings">Location</button>
+</div>
+
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem;">
+  <h2>Log</h2>
+  <span id="log-count" style="font-size:13px; color:var(--text-muted);"></span>
+</div>
+<div id="log-list"></div>
+
+<div id="modal-root"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

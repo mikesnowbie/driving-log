@@ -1,0 +1,9 @@
+{
+  "name": "Driving log",
+  "short_name": "Driving log",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f5f4f0",
+  "theme_color": "#ffffff",
+  "icons": []
+}
