@@ -3,7 +3,8 @@ import {
   getFirestore, collection, doc, getDocs, setDoc, deleteDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+  getRedirectResult, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { getSunTimes } from "./sun.js";
@@ -13,6 +14,9 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+
+// Handle result from a previous signInWithRedirect call (mobile fallback).
+getRedirectResult(auth).catch(() => {});
 
 const ALLOWED_EMAILS = ["mike@snowbies.com", "amy@snowbies.com"];
 
@@ -966,7 +970,17 @@ function showSignInScreen() {
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (e) {
-      if (e.code !== "auth/popup-closed-by-user") {
+      if (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment") {
+        // Popup was blocked (common on mobile/in-app browsers) — fall back to redirect.
+        try {
+          await signInWithRedirect(auth, googleProvider);
+        } catch {
+          alert(
+            "Sign-in couldn't open.\n\n" +
+            "If you tapped a link from Messages, Mail, or another app, please copy this URL and open it directly in Safari, then try signing in again."
+          );
+        }
+      } else if (e.code !== "auth/popup-closed-by-user") {
         alert("Sign-in failed: " + e.message);
       }
     }
