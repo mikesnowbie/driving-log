@@ -16,7 +16,15 @@ const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
 // Handle result from a previous signInWithRedirect call (mobile fallback).
-getRedirectResult(auth).catch(() => {});
+// If the redirect failed (e.g. storage-partitioned iOS environment), surface the
+// open-in-Safari hint rather than silently dropping the error.
+getRedirectResult(auth).catch((e) => {
+  if (e.code === "auth/no-auth-event") return;
+  alert(
+    "Sign-in couldn't complete.\n\n" +
+    "If you opened this page from a link in Messages, Mail, or another app, please copy this URL and open it directly in Safari, then try signing in again."
+  );
+});
 
 const ALLOWED_EMAILS = ["mike@snowbies.com", "amy@snowbies.com"];
 
