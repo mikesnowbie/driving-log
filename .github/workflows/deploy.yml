@@ -28,3 +28,9 @@ jobs:
           path: .
       - id: deployment
         uses: actions/deploy-pages@v4
+      - name: Deploy Firestore rules
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          echo "$FIREBASE_SERVICE_ACCOUNT" > /tmp/firebase-sa.json
+          GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json npx firebase-tools@latest deploy --only firestore:rules --project driving-log-79ec6 --non-interactive
