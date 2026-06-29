@@ -10,6 +10,10 @@ import { firebaseConfig } from "./firebase-config.js";
 import { getSunTimes } from "./sun.js";
 import confetti from "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.module.mjs";
 
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
@@ -56,7 +60,7 @@ function readConditions(prefix) {
 function conditionsLabel(entry) {
   if (!entry.conditions || !entry.conditions.length) return "";
   const map = Object.fromEntries(CONDITIONS.map((c) => [c.id, c.label]));
-  return entry.conditions.map((c) => map[c] || c).join(", ");
+  return entry.conditions.map((c) => map[c] || "").filter(Boolean).join(", ");
 }
 
 const DRIVES_COL = "drives";
@@ -94,6 +98,10 @@ function round1(n) { return Math.round(n * 10) / 10; }
 
 function splitDayNight(startMs, endMs, lat, lon) {
   if (endMs <= startMs) return { day: 0, night: 0 };
+  if (endMs - startMs > 7 * 24 * 60 * 60 * 1000) {
+    alert("Drive duration exceeds 7 days — please check start and end times.");
+    return { day: 0, night: 0 };
+  }
   let dayMs = 0, nightMs = 0;
   const cursor = new Date(startMs);
   cursor.setHours(0, 0, 0, 0);
@@ -200,11 +208,13 @@ function openSetupModal() {
     btn.textContent = "Getting location…";
     btn.disabled = true;
     navigator.geolocation.getCurrentPosition(async (pos) => {
-      const label = (document.getElementById("setup-label").value.trim()) || "Home";
+      const labelEl = document.getElementById("setup-label");
+      if (!labelEl) return;
+      const label = (labelEl.value.trim()) || "Home";
       await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
     }, () => {
-      btn.textContent = "Use current location";
-      btn.disabled = false;
+      const b = document.getElementById("setup-geolocate");
+      if (b) { b.textContent = "Use current location"; b.disabled = false; }
       alert("Could not get your location. Enter latitude and longitude manually.");
     });
   });
@@ -224,7 +234,7 @@ function openSetupModal() {
 function openSettingsModal() {
   const cfg = state.config;
   const permitVal = cfg && cfg.permitIssuedDate
-    ? new Date(cfg.permitIssuedDate).toISOString().slice(0, 10) : "";
+    ? fmtDateInput(new Date(cfg.permitIssuedDate)) : "";
   const body =
     '<div style="font-size:13px; font-weight:500; margin-bottom:10px; color:var(--text-secondary);">📍 Location</div>' +
     '<div class="field-group">' +
@@ -258,12 +268,14 @@ function openSettingsModal() {
     btn.textContent = "Getting location…";
     btn.disabled = true;
     navigator.geolocation.getCurrentPosition(async (pos) => {
-      const label = (document.getElementById("cfg-label").value.trim()) || "Home";
+      const labelEl = document.getElementById("cfg-label");
+      if (!labelEl) return;
+      const label = (labelEl.value.trim()) || "Home";
       await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
       closeModal();
     }, () => {
-      btn.textContent = "Use current location";
-      btn.disabled = false;
+      const b = document.getElementById("cfg-geolocate");
+      if (b) { b.textContent = "Use current location"; b.disabled = false; }
       alert("Could not get your location. Enter latitude and longitude manually.");
     });
   });
@@ -288,8 +300,12 @@ function openSettingsModal() {
   });
 }
 
+let unsubConfig = null;
+let unsubDrives = null;
+let unsubActive = null;
+
 function listenForConfig() {
-  onSnapshot(META_CONFIG, (snap) => {
+  unsubConfig = onSnapshot(META_CONFIG, (snap) => {
     const data = snap.exists() ? snap.data() : null;
     state.config = (data && data.lat != null && data.lon != null) ? data : null;
     if (!state.config) {
@@ -297,13 +313,14 @@ function listenForConfig() {
     } else if (document.getElementById("setup-modal")) {
       document.getElementById("modal-root").innerHTML = "";
     }
+    render();
   }, (err) => {
     console.error(err);
   });
 }
 
 function listenForChanges() {
-  onSnapshot(collection(db, DRIVES_COL), (snap) => {
+  unsubDrives = onSnapshot(collection(db, DRIVES_COL), (snap) => {
     state.drives = snap.docs.map((d) => migrateEntry(d.data()));
     setSyncStatus("");
     render();
@@ -312,12 +329,13 @@ function listenForChanges() {
     setSyncStatus("Connection error. Check your network.");
   });
 
-  onSnapshot(META_DOC, (snap) => {
+  unsubActive = onSnapshot(META_DOC, (snap) => {
     const data = snap.data();
     state.active = data && !data.empty ? data : null;
     render();
   }, (err) => {
     console.error(err);
+    setSyncStatus("Connection error. Check your network.");
   });
 }
 
@@ -407,8 +425,8 @@ function render() {
         '<span style="font-weight:500; font-size:14px;">' + dateLabel + "</span>" +
         '<span style="font-size:14px; font-weight:500;">' + hrs + " hr</span>" +
       "</div>" +
-      '<div style="font-size:13px; color:var(--text-secondary); margin-top:2px;">' + timeLabel + (d.supervisor ? " \u00b7 " + supervisorLabel(d) : "") + "</div>" +
-      '<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">Day ' + dayHrs + "h \u00b7 Night " + nightHrs + "h" + (conditionsLabel(d) ? " \u00b7 " + conditionsLabel(d) : "") + (d.notes ? " \u00b7 " + d.notes : "") + "</div>" +
+      '<div style="font-size:13px; color:var(--text-secondary); margin-top:2px;">' + timeLabel + (d.supervisor ? " \u00b7 " + escHtml(supervisorLabel(d)) : "") + "</div>" +
+      '<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">Day ' + dayHrs + "h \u00b7 Night " + nightHrs + "h" + (conditionsLabel(d) ? " \u00b7 " + escHtml(conditionsLabel(d)) : "") + (d.notes ? " \u00b7 " + escHtml(d.notes) : "") + "</div>" +
     "</div>";
   }).join("");
 
@@ -531,6 +549,8 @@ function openStopModal() {
   attachCloseHandler();
   wireConditions("stop");
   document.getElementById("stop-confirm").addEventListener("click", async () => {
+    if (!state.active) { closeModal(); return; }
+    if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
     const dt = combineDateTime(document.getElementById("stop-date").value, document.getElementById("stop-time").value);
     if (!dt) return;
     const endMs = dt.getTime();
@@ -593,6 +613,8 @@ function openFixActiveModal() {
       '<button id="fix-confirm" class="btn-primary">Save and close drive</button>';
     wireConditions("fix-time");
     document.getElementById("fix-confirm").addEventListener("click", async () => {
+      if (!state.active) { closeModal(); return; }
+      if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
       const dt = combineDateTime(document.getElementById("fix-date").value, document.getElementById("fix-time").value);
       if (!dt) return;
       const endMs = dt.getTime();
@@ -697,6 +719,7 @@ function openManualModal() {
     wireSupervisorToggle("m");
     wireConditions("m-time");
     document.getElementById("m-confirm-time").addEventListener("click", async () => {
+      if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
       const startDt = combineDateTime(document.getElementById("m-start-date").value, document.getElementById("m-start-time").value);
       const endDt = combineDateTime(document.getElementById("m-end-date").value, document.getElementById("m-end-time").value);
       if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) { alert("End must be after start."); return; }
@@ -824,6 +847,7 @@ function openEditModal(entry) {
     entry.conditions = readConditions("e");
     entry.notes = document.getElementById("e-notes").value.trim();
     if (isTimed) {
+      if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
       const startDt = combineDateTime(document.getElementById("e-start-date").value, document.getElementById("e-start-time").value);
       const endDt = combineDateTime(document.getElementById("e-end-date").value, document.getElementById("e-end-time").value);
       if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) { alert("End must be after start."); return; }
@@ -915,7 +939,7 @@ function openPrintWindow() {
   w.document.write(html);
   w.document.close();
   w.focus();
-  w.print();
+  w.onload = () => w.print();
 }
 
 function exportCsv() {
@@ -1021,6 +1045,11 @@ function showAccountBar(user) {
 }
 
 let appInitialized = false;
+function teardownListeners() {
+  if (unsubConfig) { unsubConfig(); unsubConfig = null; }
+  if (unsubDrives) { unsubDrives(); unsubDrives = null; }
+  if (unsubActive) { unsubActive(); unsubActive = null; }
+}
 function initApp(user) {
   document.getElementById("auth-root").innerHTML = "";
   document.getElementById("app-root").style.display = "block";
@@ -1040,6 +1069,7 @@ function initApp(user) {
 
 onAuthStateChanged(auth, (user) => {
   if (!user) {
+    teardownListeners();
     appInitialized = false;
     showSignInScreen();
   } else if (!ALLOWED_EMAILS.includes(user.email)) {
