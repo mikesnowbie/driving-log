@@ -110,10 +110,8 @@ function round1(n) { return Math.round(n * 10) / 10; }
 
 function splitDayNight(startMs, endMs, lat, lon) {
   if (endMs <= startMs) return { day: 0, night: 0 };
-  if (endMs - startMs > 7 * 24 * 60 * 60 * 1000) {
-    alert("Drive duration exceeds 7 days — please check start and end times.");
-    return { day: 0, night: 0 };
-  }
+  if (endMs - startMs > 7 * 24 * 60 * 60 * 1000) return null;
+
   let dayMs = 0, nightMs = 0;
   const cursor = new Date(startMs);
   cursor.setHours(0, 0, 0, 0);
@@ -600,6 +598,7 @@ function openStopModal() {
     const startMs = state.active.startTime;
     if (endMs <= startMs) { alert("End time must be after start time."); return; }
     const split = splitDayNight(startMs, endMs, state.config.lat, state.config.lon);
+    if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
     const stopNote = document.getElementById("stop-notes").value.trim();
     const combinedNote = startNote && stopNote ? startNote + " — " + stopNote : startNote || stopNote;
     const entry = {
@@ -669,6 +668,7 @@ function openFixActiveModal() {
       const startMs = state.active.startTime;
       if (endMs <= startMs) { alert("End time must be after start time."); return; }
       const split = splitDayNight(startMs, endMs, state.config.lat, state.config.lon);
+      if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
       const fixStopNote = document.getElementById("fix-notes").value.trim();
       const fixCombinedNote = fixStartNote && fixStopNote ? fixStartNote + " — " + fixStopNote : fixStartNote || fixStopNote;
       const entry = {
@@ -783,6 +783,7 @@ function openManualModal() {
       const endDt = combineDateTime(document.getElementById("m-end-date").value, document.getElementById("m-end-time").value);
       if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) { alert("End must be after start."); return; }
       const split = splitDayNight(startDt.getTime(), endDt.getTime(), state.config.lat, state.config.lon);
+      if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
       const sup = readSupervisor("m");
       const entry = {
         id: uid(), schemaVersion: SCHEMA_VERSION,
@@ -916,6 +917,7 @@ function openEditModal(entry) {
       const endDt = combineDateTime(document.getElementById("e-end-date").value, document.getElementById("e-end-time").value);
       if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) { alert("End must be after start."); return; }
       const split = splitDayNight(startDt.getTime(), endDt.getTime(), state.config.lat, state.config.lon);
+      if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
       updated.startTime = startDt.getTime();
       updated.endTime = endDt.getTime();
       updated.sortTime = startDt.getTime();
@@ -999,10 +1001,10 @@ function openPrintWindow() {
     "</body></html>";
   const w = window.open("", "_blank");
   if (!w) { alert("Allow pop-ups to use Print summary."); return; }
+  w.onload = () => w.print();
   w.document.write(html);
   w.document.close();
   w.focus();
-  w.onload = () => w.print();
 }
 
 function exportCsv() {
