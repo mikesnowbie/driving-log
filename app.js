@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, getDocs, setDoc, deleteDoc, onSnapshot
+  getFirestore, collection, doc, getDocs, setDoc, deleteDoc, onSnapshot, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
@@ -9,6 +9,22 @@ import {
 import { firebaseConfig } from "./firebase-config.js";
 import { getSunTimes } from "./sun.js";
 import confetti from "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.module.mjs";
+
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function runWithLock(btn, fn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
+    await fn();
+  } catch (err) {
+    console.error(err);
+    alert("Could not save. Check your network and try again.");
+    btn.disabled = false;
+  }
+}
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
@@ -56,7 +72,7 @@ function readConditions(prefix) {
 function conditionsLabel(entry) {
   if (!entry.conditions || !entry.conditions.length) return "";
   const map = Object.fromEntries(CONDITIONS.map((c) => [c.id, c.label]));
-  return entry.conditions.map((c) => map[c] || c).join(", ");
+  return entry.conditions.map((c) => map[c] || "").filter(Boolean).join(", ");
 }
 
 const DRIVES_COL = "drives";
@@ -94,6 +110,8 @@ function round1(n) { return Math.round(n * 10) / 10; }
 
 function splitDayNight(startMs, endMs, lat, lon) {
   if (endMs <= startMs) return { day: 0, night: 0 };
+  if (endMs - startMs > 7 * 24 * 60 * 60 * 1000) return null;
+
   let dayMs = 0, nightMs = 0;
   const cursor = new Date(startMs);
   cursor.setHours(0, 0, 0, 0);
@@ -119,12 +137,17 @@ function splitDayNight(startMs, endMs, lat, lon) {
 }
 
 function migrateEntry(e) {
+  let dirty = false;
   if (!e.schemaVersion) {
     e.schemaVersion = SCHEMA_VERSION;
-    if (e.supervisor === undefined) e.supervisor = "";
-    if (e.notes === undefined) e.notes = "";
+    if (e.supervisor === undefined) { e.supervisor = ""; }
+    if (e.notes === undefined) { e.notes = ""; }
+    dirty = true;
   }
-  if (e.conditions === undefined) e.conditions = [];
+  if (e.conditions === undefined) { e.conditions = []; dirty = true; }
+  if (dirty && e.id) {
+    setDoc(doc(db, DRIVES_COL, e.id), e).catch(console.error);
+  }
   return e;
 }
 
@@ -200,16 +223,26 @@ function openSetupModal() {
     btn.textContent = "Getting location…";
     btn.disabled = true;
     navigator.geolocation.getCurrentPosition(async (pos) => {
-      const label = (document.getElementById("setup-label").value.trim()) || "Home";
-      await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
+      const labelEl = document.getElementById("setup-label");
+      if (!labelEl) return;
+      const label = (labelEl.value.trim()) || "Home";
+      try {
+        await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
+      } catch (err) {
+        console.error(err);
+        const b = document.getElementById("setup-geolocate");
+        if (b) { b.textContent = "Use current location"; b.disabled = false; }
+        alert("Could not save location. Check your network and try again.");
+      }
     }, () => {
-      btn.textContent = "Use current location";
-      btn.disabled = false;
+      const b = document.getElementById("setup-geolocate");
+      if (b) { b.textContent = "Use current location"; b.disabled = false; }
       alert("Could not get your location. Enter latitude and longitude manually.");
     });
   });
 
-  document.getElementById("setup-manual-save").addEventListener("click", async () => {
+  const setupManualSaveBtn = document.getElementById("setup-manual-save");
+  setupManualSaveBtn.addEventListener("click", async () => {
     const lat = parseFloat(document.getElementById("setup-lat").value);
     const lon = parseFloat(document.getElementById("setup-lon").value);
     if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
@@ -217,14 +250,14 @@ function openSetupModal() {
       return;
     }
     const label = (document.getElementById("setup-label").value.trim()) || "Home";
-    await saveConfig({ lat, lon, label });
+    await runWithLock(setupManualSaveBtn, async () => { await saveConfig({ lat, lon, label }); });
   });
 }
 
 function openSettingsModal() {
   const cfg = state.config;
   const permitVal = cfg && cfg.permitIssuedDate
-    ? new Date(cfg.permitIssuedDate).toISOString().slice(0, 10) : "";
+    ? fmtDateInput(new Date(cfg.permitIssuedDate)) : "";
   const body =
     '<div style="font-size:13px; font-weight:500; margin-bottom:10px; color:var(--text-secondary);">📍 Location</div>' +
     '<div class="field-group">' +
@@ -258,17 +291,27 @@ function openSettingsModal() {
     btn.textContent = "Getting location…";
     btn.disabled = true;
     navigator.geolocation.getCurrentPosition(async (pos) => {
-      const label = (document.getElementById("cfg-label").value.trim()) || "Home";
-      await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
-      closeModal();
+      const labelEl = document.getElementById("cfg-label");
+      if (!labelEl) return;
+      const label = (labelEl.value.trim()) || "Home";
+      try {
+        await saveConfig({ lat: pos.coords.latitude, lon: pos.coords.longitude, label });
+        closeModal();
+      } catch (err) {
+        console.error(err);
+        const b = document.getElementById("cfg-geolocate");
+        if (b) { b.textContent = "Use current location"; b.disabled = false; }
+        alert("Could not save location. Check your network and try again.");
+      }
     }, () => {
-      btn.textContent = "Use current location";
-      btn.disabled = false;
+      const b = document.getElementById("cfg-geolocate");
+      if (b) { b.textContent = "Use current location"; b.disabled = false; }
       alert("Could not get your location. Enter latitude and longitude manually.");
     });
   });
 
-  document.getElementById("cfg-save").addEventListener("click", async () => {
+  const cfgSaveBtn = document.getElementById("cfg-save");
+  cfgSaveBtn.addEventListener("click", async () => {
     const lat = parseFloat(document.getElementById("cfg-lat").value);
     const lon = parseFloat(document.getElementById("cfg-lon").value);
     if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
@@ -276,20 +319,26 @@ function openSettingsModal() {
       return;
     }
     const label = (document.getElementById("cfg-label").value.trim()) || "Home";
-    await saveConfig({ lat, lon, label });
-    closeModal();
+    await runWithLock(cfgSaveBtn, async () => { await saveConfig({ lat, lon, label }); closeModal(); });
   });
 
-  document.getElementById("cfg-permit-save").addEventListener("click", async () => {
+  const cfgPermitBtn = document.getElementById("cfg-permit-save");
+  cfgPermitBtn.addEventListener("click", async () => {
     const val = document.getElementById("cfg-permit").value;
     if (!val) { alert("Pick a date."); return; }
-    await saveConfig({ permitIssuedDate: new Date(val + "T12:00:00").getTime() });
-    closeModal();
+    await runWithLock(cfgPermitBtn, async () => {
+      await saveConfig({ permitIssuedDate: new Date(val + "T12:00:00").getTime() });
+      closeModal();
+    });
   });
 }
 
+let unsubConfig = null;
+let unsubDrives = null;
+let unsubActive = null;
+
 function listenForConfig() {
-  onSnapshot(META_CONFIG, (snap) => {
+  unsubConfig = onSnapshot(META_CONFIG, (snap) => {
     const data = snap.exists() ? snap.data() : null;
     state.config = (data && data.lat != null && data.lon != null) ? data : null;
     if (!state.config) {
@@ -297,13 +346,14 @@ function listenForConfig() {
     } else if (document.getElementById("setup-modal")) {
       document.getElementById("modal-root").innerHTML = "";
     }
+    render();
   }, (err) => {
     console.error(err);
   });
 }
 
 function listenForChanges() {
-  onSnapshot(collection(db, DRIVES_COL), (snap) => {
+  unsubDrives = onSnapshot(collection(db, DRIVES_COL), (snap) => {
     state.drives = snap.docs.map((d) => migrateEntry(d.data()));
     setSyncStatus("");
     render();
@@ -312,12 +362,13 @@ function listenForChanges() {
     setSyncStatus("Connection error. Check your network.");
   });
 
-  onSnapshot(META_DOC, (snap) => {
+  unsubActive = onSnapshot(META_DOC, (snap) => {
     const data = snap.data();
     state.active = data && !data.empty ? data : null;
     render();
   }, (err) => {
     console.error(err);
+    setSyncStatus("Connection error. Check your network.");
   });
 }
 
@@ -407,8 +458,8 @@ function render() {
         '<span style="font-weight:500; font-size:14px;">' + dateLabel + "</span>" +
         '<span style="font-size:14px; font-weight:500;">' + hrs + " hr</span>" +
       "</div>" +
-      '<div style="font-size:13px; color:var(--text-secondary); margin-top:2px;">' + timeLabel + (d.supervisor ? " \u00b7 " + supervisorLabel(d) : "") + "</div>" +
-      '<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">Day ' + dayHrs + "h \u00b7 Night " + nightHrs + "h" + (conditionsLabel(d) ? " \u00b7 " + conditionsLabel(d) : "") + (d.notes ? " \u00b7 " + d.notes : "") + "</div>" +
+      '<div style="font-size:13px; color:var(--text-secondary); margin-top:2px;">' + timeLabel + (d.supervisor ? " \u00b7 " + escHtml(supervisorLabel(d)) : "") + "</div>" +
+      '<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">Day ' + dayHrs + "h \u00b7 Night " + nightHrs + "h" + (conditionsLabel(d) ? " \u00b7 " + escHtml(conditionsLabel(d)) : "") + (d.notes ? " \u00b7 " + escHtml(d.notes) : "") + "</div>" +
     "</div>";
   }).join("");
 
@@ -491,19 +542,26 @@ function openStartModal() {
   attachCloseHandler();
   wireSupervisorToggle("start");
   wireConditions("start");
-  document.getElementById("start-confirm").addEventListener("click", async () => {
+  const startConfirmBtn = document.getElementById("start-confirm");
+  startConfirmBtn.addEventListener("click", async () => {
+    if (state.active) {
+      if (!confirm("A drive is already in progress — start a new one and discard the current active record?")) return;
+    }
     const dt = combineDateTime(document.getElementById("start-date").value, document.getElementById("start-time").value);
     if (!dt) return;
     const sup = readSupervisor("start");
-    state.active = {
+    const activeData = {
       startTime: dt.getTime(),
       supervisor: sup.supervisor,
       supervisorName: sup.supervisorName,
       conditions: readConditions("start"),
       notes: document.getElementById("start-notes").value.trim()
     };
-    await saveActive();
-    closeModal();
+    await runWithLock(startConfirmBtn, async () => {
+      state.active = activeData;
+      await saveActive();
+      closeModal();
+    });
   });
 }
 
@@ -530,13 +588,17 @@ function openStopModal() {
   document.getElementById("modal-root").innerHTML = modalShell("Stop drive", body);
   attachCloseHandler();
   wireConditions("stop");
-  document.getElementById("stop-confirm").addEventListener("click", async () => {
+  const stopConfirmBtn = document.getElementById("stop-confirm");
+  stopConfirmBtn.addEventListener("click", async () => {
+    if (!state.active) { closeModal(); return; }
+    if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
     const dt = combineDateTime(document.getElementById("stop-date").value, document.getElementById("stop-time").value);
     if (!dt) return;
     const endMs = dt.getTime();
     const startMs = state.active.startTime;
     if (endMs <= startMs) { alert("End time must be after start time."); return; }
     const split = splitDayNight(startMs, endMs, state.config.lat, state.config.lon);
+    if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
     const stopNote = document.getElementById("stop-notes").value.trim();
     const combinedNote = startNote && stopNote ? startNote + " — " + stopNote : startNote || stopNote;
     const entry = {
@@ -552,10 +614,14 @@ function openStopModal() {
       conditions: readConditions("stop"),
       notes: combinedNote
     };
-    await saveDrive(entry);
-    state.active = null;
-    await saveActive();
-    closeModal();
+    await runWithLock(stopConfirmBtn, async () => {
+      const batch = writeBatch(db);
+      batch.set(doc(db, DRIVES_COL, entry.id), entry);
+      batch.set(META_DOC, { empty: true });
+      await batch.commit();
+      state.active = null;
+      closeModal();
+    });
   });
 }
 
@@ -592,13 +658,17 @@ function openFixActiveModal() {
       "</div>" +
       '<button id="fix-confirm" class="btn-primary">Save and close drive</button>';
     wireConditions("fix-time");
-    document.getElementById("fix-confirm").addEventListener("click", async () => {
+    const fixConfirmBtn = document.getElementById("fix-confirm");
+    fixConfirmBtn.addEventListener("click", async () => {
+      if (!state.active) { closeModal(); return; }
+      if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
       const dt = combineDateTime(document.getElementById("fix-date").value, document.getElementById("fix-time").value);
       if (!dt) return;
       const endMs = dt.getTime();
       const startMs = state.active.startTime;
       if (endMs <= startMs) { alert("End time must be after start time."); return; }
       const split = splitDayNight(startMs, endMs, state.config.lat, state.config.lon);
+      if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
       const fixStopNote = document.getElementById("fix-notes").value.trim();
       const fixCombinedNote = fixStartNote && fixStopNote ? fixStartNote + " — " + fixStopNote : fixStartNote || fixStopNote;
       const entry = {
@@ -609,10 +679,14 @@ function openFixActiveModal() {
         conditions: readConditions("fix-time"),
         notes: fixCombinedNote
       };
-      await saveDrive(entry);
-      state.active = null;
-      await saveActive();
-      closeModal();
+      await runWithLock(fixConfirmBtn, async () => {
+        const batch = writeBatch(db);
+        batch.set(doc(db, DRIVES_COL, entry.id), entry);
+        batch.set(META_DOC, { empty: true });
+        await batch.commit();
+        state.active = null;
+        closeModal();
+      });
     });
   }
   function showDurationMode() {
@@ -633,7 +707,9 @@ function openFixActiveModal() {
       "</div>" +
       '<button id="fix-confirm-dur" class="btn-primary">Save and close drive</button>';
     wireConditions("fix-dur");
-    document.getElementById("fix-confirm-dur").addEventListener("click", async () => {
+    const fixConfirmDurBtn = document.getElementById("fix-confirm-dur");
+    fixConfirmDurBtn.addEventListener("click", async () => {
+      if (!state.active) { closeModal(); return; }
       const mins = parseInt(document.getElementById("fix-minutes").value, 10);
       if (!mins || mins <= 0) { alert("Enter a valid number of minutes."); return; }
       const cls = document.getElementById("fix-class").value;
@@ -649,10 +725,14 @@ function openFixActiveModal() {
         conditions: readConditions("fix-dur"),
         notes: fixDurCombined
       };
-      await saveDrive(entry);
-      state.active = null;
-      await saveActive();
-      closeModal();
+      await runWithLock(fixConfirmDurBtn, async () => {
+        const batch = writeBatch(db);
+        batch.set(doc(db, DRIVES_COL, entry.id), entry);
+        batch.set(META_DOC, { empty: true });
+        await batch.commit();
+        state.active = null;
+        closeModal();
+      });
     });
   }
   document.getElementById("fix-mode-time").addEventListener("click", showTimeMode);
@@ -696,11 +776,14 @@ function openManualModal() {
       '<button id="m-confirm-time" class="btn-primary">Save drive</button>';
     wireSupervisorToggle("m");
     wireConditions("m-time");
-    document.getElementById("m-confirm-time").addEventListener("click", async () => {
+    const mConfirmTimeBtn = document.getElementById("m-confirm-time");
+    mConfirmTimeBtn.addEventListener("click", async () => {
+      if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
       const startDt = combineDateTime(document.getElementById("m-start-date").value, document.getElementById("m-start-time").value);
       const endDt = combineDateTime(document.getElementById("m-end-date").value, document.getElementById("m-end-time").value);
       if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) { alert("End must be after start."); return; }
       const split = splitDayNight(startDt.getTime(), endDt.getTime(), state.config.lat, state.config.lon);
+      if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
       const sup = readSupervisor("m");
       const entry = {
         id: uid(), schemaVersion: SCHEMA_VERSION,
@@ -710,8 +793,7 @@ function openManualModal() {
         conditions: readConditions("m-time"),
         notes: document.getElementById("m-notes").value.trim()
       };
-      await saveDrive(entry);
-      closeModal();
+      await runWithLock(mConfirmTimeBtn, async () => { await saveDrive(entry); closeModal(); });
     });
   }
   function showDurationMode() {
@@ -737,7 +819,8 @@ function openManualModal() {
       '<button id="m-confirm-dur" class="btn-primary">Save drive</button>';
     wireSupervisorToggle("m");
     wireConditions("m-dur");
-    document.getElementById("m-confirm-dur").addEventListener("click", async () => {
+    const mConfirmDurBtn = document.getElementById("m-confirm-dur");
+    mConfirmDurBtn.addEventListener("click", async () => {
       const dateVal = document.getElementById("m-date").value;
       const mins = parseInt(document.getElementById("m-minutes").value, 10);
       if (!dateVal) { alert("Enter a date."); return; }
@@ -755,8 +838,7 @@ function openManualModal() {
         conditions: readConditions("m-dur"),
         notes: document.getElementById("m-notes-dur").value.trim()
       };
-      await saveDrive(entry);
-      closeModal();
+      await runWithLock(mConfirmDurBtn, async () => { await saveDrive(entry); closeModal(); });
     });
   }
   document.getElementById("manual-mode-time").addEventListener("click", showTimeMode);
@@ -817,43 +899,50 @@ function openEditModal(entry) {
   wireSupervisorToggle("e");
   wireConditions("e");
 
-  document.getElementById("e-save").addEventListener("click", async () => {
+  const eSaveBtn = document.getElementById("e-save");
+  eSaveBtn.addEventListener("click", async () => {
+    const live = state.drives.find((d) => d.id === entry.id);
+    if (!live) { alert("This entry was already deleted."); closeModal(); return; }
     const sup = readSupervisor("e");
-    entry.supervisor = sup.supervisor;
-    entry.supervisorName = sup.supervisorName;
-    entry.conditions = readConditions("e");
-    entry.notes = document.getElementById("e-notes").value.trim();
+    const updated = {
+      ...live,
+      supervisor: sup.supervisor,
+      supervisorName: sup.supervisorName,
+      conditions: readConditions("e"),
+      notes: document.getElementById("e-notes").value.trim()
+    };
     if (isTimed) {
+      if (!state.config) { alert("Location not set yet — try again in a moment."); return; }
       const startDt = combineDateTime(document.getElementById("e-start-date").value, document.getElementById("e-start-time").value);
       const endDt = combineDateTime(document.getElementById("e-end-date").value, document.getElementById("e-end-time").value);
       if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) { alert("End must be after start."); return; }
       const split = splitDayNight(startDt.getTime(), endDt.getTime(), state.config.lat, state.config.lon);
-      entry.startTime = startDt.getTime();
-      entry.endTime = endDt.getTime();
-      entry.sortTime = startDt.getTime();
-      entry.dayMinutes = split.day;
-      entry.nightMinutes = split.night;
+      if (!split) { alert("Drive duration exceeds 7 days — please check start and end times."); return; }
+      updated.startTime = startDt.getTime();
+      updated.endTime = endDt.getTime();
+      updated.sortTime = startDt.getTime();
+      updated.dayMinutes = split.day;
+      updated.nightMinutes = split.night;
     } else {
       const dateVal = document.getElementById("e-m-date").value;
       const mins = parseInt(document.getElementById("e-m-minutes").value, 10);
       if (!mins || mins <= 0) { alert("Enter a valid number of minutes."); return; }
       const cls = document.getElementById("e-m-class").value;
       const dt = combineDateTime(dateVal, "12:00");
-      entry.manualDate = dt.getTime();
-      entry.sortTime = dt.getTime();
-      entry.manualMinutes = mins;
-      entry.manualClass = cls;
-      entry.dayMinutes = cls === "day" ? mins : 0;
-      entry.nightMinutes = cls === "night" ? mins : 0;
+      updated.manualDate = dt.getTime();
+      updated.sortTime = dt.getTime();
+      updated.manualMinutes = mins;
+      updated.manualClass = cls;
+      updated.dayMinutes = cls === "day" ? mins : 0;
+      updated.nightMinutes = cls === "night" ? mins : 0;
     }
-    await saveDrive(entry);
-    closeModal();
+    await runWithLock(eSaveBtn, async () => { await saveDrive(updated); closeModal(); });
   });
 
-  document.getElementById("e-delete").addEventListener("click", async () => {
+  const eDeleteBtn = document.getElementById("e-delete");
+  eDeleteBtn.addEventListener("click", async () => {
     if (!confirm("Delete this drive entry? This cannot be undone.")) return;
-    await deleteDrive(entry.id);
-    closeModal();
+    await runWithLock(eDeleteBtn, async () => { await deleteDrive(entry.id); closeModal(); });
   });
 }
 
@@ -912,10 +1001,10 @@ function openPrintWindow() {
     "</body></html>";
   const w = window.open("", "_blank");
   if (!w) { alert("Allow pop-ups to use Print summary."); return; }
+  w.onload = () => w.print();
   w.document.write(html);
   w.document.close();
   w.focus();
-  w.print();
 }
 
 function exportCsv() {
@@ -1002,7 +1091,7 @@ function showWrongAccountScreen(user) {
       '<div style="text-align:center; max-width:380px; width:100%;">' +
         '<div style="font-size:48px; margin-bottom:1rem;">🚧</div>' +
         '<h2 style="font-size:18px; font-weight:500; margin:0 0 0.75rem;">Wrong driver\'s seat</h2>' +
-        '<p style="font-size:14px; color:var(--text-secondary); margin:0 0 0.75rem;">You\'re signed in as <strong>' + user.email + '</strong>, but this log is a private Snow family operation — teen driver, worried parents, the whole deal.</p>' +
+        '<p style="font-size:14px; color:var(--text-secondary); margin:0 0 0.75rem;">You\'re signed in as <strong>' + escHtml(user.email) + '</strong>, but this log is a private Snow family operation — teen driver, worried parents, the whole deal.</p>' +
         '<p style="font-size:14px; color:var(--text-secondary); margin:0 0 1.5rem;">The good news: the code is open source on GitHub. Fork it, set up your own Firebase project, and you too can obsessively log every left turn your teenager makes. 🎉</p>' +
         '<button id="btn-wrong-signout" style="width:100%;">Sign out and try another account</button>' +
       '</div>' +
@@ -1013,7 +1102,7 @@ function showWrongAccountScreen(user) {
 function showAccountBar(user) {
   const bar = document.getElementById("account-bar");
   bar.innerHTML =
-    '<span>' + (user.displayName || user.email) + '</span>' +
+    '<span>' + escHtml(user.displayName || user.email) + '</span>' +
     '<span style="color:var(--border-strong);">·</span>' +
     '<button id="btn-signout" style="background:none; border:none; padding:0; font-size:12px; color:var(--text-muted); cursor:pointer; text-decoration:underline; font-family:inherit;">Sign out</button>';
   document.getElementById("btn-signout").addEventListener("click", () => signOut(auth));
@@ -1021,6 +1110,11 @@ function showAccountBar(user) {
 }
 
 let appInitialized = false;
+function teardownListeners() {
+  if (unsubConfig) { unsubConfig(); unsubConfig = null; }
+  if (unsubDrives) { unsubDrives(); unsubDrives = null; }
+  if (unsubActive) { unsubActive(); unsubActive = null; }
+}
 function initApp(user) {
   document.getElementById("auth-root").innerHTML = "";
   document.getElementById("app-root").style.display = "block";
@@ -1040,6 +1134,7 @@ function initApp(user) {
 
 onAuthStateChanged(auth, (user) => {
   if (!user) {
+    teardownListeners();
     appInitialized = false;
     showSignInScreen();
   } else if (!ALLOWED_EMAILS.includes(user.email)) {

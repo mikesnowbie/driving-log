@@ -5,11 +5,21 @@ service cloud.firestore {
 
     function isAuthorized() {
       return request.auth != null &&
+        request.auth.token.email_verified == true &&
         request.auth.token.email in ['mike@snowbies.com', 'amy@snowbies.com'];
     }
 
+    function isValidDrive(data) {
+      return data.keys().hasAll(['id', 'schemaVersion', 'sortTime', 'dayMinutes', 'nightMinutes']) &&
+        data.dayMinutes is number && data.dayMinutes >= 0 && data.dayMinutes <= 1440 &&
+        data.nightMinutes is number && data.nightMinutes >= 0 && data.nightMinutes <= 1440 &&
+        data.sortTime is number;
+    }
+
     match /drives/{driveId} {
-      allow read, write: if isAuthorized();
+      allow read: if isAuthorized();
+      allow create, update: if isAuthorized() && isValidDrive(request.resource.data);
+      allow delete: if isAuthorized();
     }
 
     match /meta/{docId} {
